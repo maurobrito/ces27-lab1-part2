@@ -18,6 +18,7 @@ func (master *Master) schedule(task *Task, proc string, filePathChan chan string
 		worker    *RemoteWorker
 		operation *Operation
 		counter   int
+		//failedMutex sinc.Mutex
 	)
 
 	log.Printf("Scheduling %v operations\n", proc)
@@ -31,6 +32,19 @@ func (master *Master) schedule(task *Task, proc string, filePathChan chan string
 		wg.Add(1)
 		go master.runOperation(worker, operation, &wg)
 	}
+
+	wg.Wait()
+
+	for op := 0; op < master.failedOperations; op++ {
+		operation = <-master.failedOperationsChan
+		worker = <-master.idleWorkerChan
+		wg.Add(1)
+		go master.runOperation(worker, operation, &wg)
+	}
+	
+	master.operationMutex.Lock()
+	master.failedOperations = 0
+	master.operationMutex.Unlock()
 
 	wg.Wait()
 
@@ -57,6 +71,10 @@ func (master *Master) runOperation(remoteWorker *RemoteWorker, operation *Operat
 	if err != nil {
 		log.Printf("Operation %v '%v' Failed. Error: %v\n", operation.proc, operation.id, err)
 		wg.Done()
+		master.operationMutex.Lock()
+		master.failedOperations++
+		master.operationMutex.Unlock()
+		master.failedOperationsChan <- operation
 		master.failedWorkerChan <- remoteWorker
 	} else {
 		wg.Done()
