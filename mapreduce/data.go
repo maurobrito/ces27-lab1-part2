@@ -6,11 +6,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
 	REDUCE_PATH = "reduce/"
 	RESULT_PATH = "result/"
+
+	OPEN_FILE_MAX_RETRY = 3
 )
 
 // Returns the name of files created after merge
@@ -47,6 +50,7 @@ func storeLocal(task *Task, idMapTask int, data []KeyValue) {
 				}
 			}
 		}
+		file.Sync()
 		file.Close()
 	}
 }
@@ -69,6 +73,18 @@ func mergeMapLocal(task *Task, mapCounter int) {
 		mergeFileEncoder = json.NewEncoder(mergeFile)
 
 		for m := 0; m < mapCounter; m++ {
+			for i := 0; i < OPEN_FILE_MAX_RETRY; i++ {
+				if file, err = os.Open(filepath.Join(REDUCE_PATH, reduceName(m, r))); err == nil {
+					break
+				}
+				log.Printf("(%v/%v) Failed to open file %v. Retrying in 1 second...", i+1, OPEN_FILE_MAX_RETRY, filepath.Join(REDUCE_PATH, reduceName(m, r)))
+				time.Sleep(time.Second)
+			}
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
 			if file, err = os.Open(filepath.Join(REDUCE_PATH, reduceName(m, r))); err != nil {
 				log.Fatal(err)
 			}
@@ -84,9 +100,11 @@ func mergeMapLocal(task *Task, mapCounter int) {
 
 				mergeFileEncoder.Encode(&kv)
 			}
+			file.Sync()
 			file.Close()
 		}
 
+		mergeFile.Sync()
 		mergeFile.Close()
 	}
 }
@@ -100,14 +118,26 @@ func mergeReduceLocal(reduceCounter int) {
 		mergeFile        *os.File
 		mergeFileEncoder *json.Encoder
 	)
+
 	if mergeFile, err = os.Create(filepath.Join(RESULT_PATH, "result-final.txt")); err != nil {
 		log.Fatal(err)
 	}
 
+	defer mergeFile.Sync()
+	defer mergeFile.Close()
+
 	mergeFileEncoder = json.NewEncoder(mergeFile)
 
 	for r := 0; r < reduceCounter; r++ {
-		if file, err = os.Open(resultFileName(r)); err != nil {
+		for i := 0; i < OPEN_FILE_MAX_RETRY; i++ {
+			if file, err = os.Open(resultFileName(r)); err == nil {
+				break
+			}
+			log.Printf("(%v/%v) Failed to open file %v. Retrying in 1 second...", i+1, OPEN_FILE_MAX_RETRY, resultFileName(r))
+			time.Sleep(time.Second)
+		}
+
+		if err != nil {
 			log.Fatal(err)
 		}
 
@@ -122,6 +152,7 @@ func mergeReduceLocal(reduceCounter int) {
 
 			mergeFileEncoder.Encode(&kv)
 		}
+		file.Sync()
 		file.Close()
 	}
 }
